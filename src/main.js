@@ -61,6 +61,7 @@ class SplashScene extends Phaser.Scene {
     super('Splash');
     this.cachedAudioDataUrl = null;
     this.musicSound = null;
+    this.loadFailed = false;
   }
 
   init() {
@@ -70,6 +71,11 @@ class SplashScene extends Phaser.Scene {
 
   preload() {
     this.cameras.main.setBackgroundColor('#101020');
+    this.load.on('loaderror', (fileObj) => {
+      if (fileObj.key === 'splashTrack') {
+        this.loadFailed = true;
+      }
+    });
     if (this.cachedAudioDataUrl) {
       this.load.audio('splashTrack', this.cachedAudioDataUrl);
     } else {
@@ -94,6 +100,7 @@ class SplashScene extends Phaser.Scene {
       this.cachedAudioDataUrl = dataUrl;
     } catch (err) {
       // Fallback: cache silently fails; we still play streamed track.
+      this.loadFailed = true;
       console.warn('Failed to cache splash track', err);
     }
   }
@@ -122,9 +129,18 @@ class SplashScene extends Phaser.Scene {
       color: '#9ad5ff',
     }).setOrigin(0.5);
 
-    this.musicSound = this.sound.add('splashTrack', { loop: false, volume: 0.8 });
-    this.musicSound.once('complete', () => this.fadeToMenu());
-    this.musicSound.play();
+    const hasAudio = this.cache.audio.exists('splashTrack') && !this.loadFailed;
+    if (hasAudio) {
+      this.musicSound = this.sound.add('splashTrack', { loop: false, volume: 0.8 });
+      this.musicSound.once('complete', () => this.fadeToMenu());
+      this.musicSound.play();
+    } else {
+      this.add.text(centerX, centerY + 100, 'Music unavailable this run; continuing...', {
+        fontSize: '14px',
+        color: '#ffadad',
+      }).setOrigin(0.5);
+      this.time.delayedCall(1200, () => this.fadeToMenu());
+    }
 
     this.input.keyboard.once('keydown-ENTER', () => this.fadeToMenu());
     this.input.keyboard.once('keydown-SPACE', () => this.fadeToMenu());
@@ -226,6 +242,15 @@ class GameScene extends Phaser.Scene {
     graphics.clear();
     graphics.fillStyle(0x2b2f44, 1).fillRect(0, 0, 160, 80);
     graphics.generateTexture('ground', 160, 80);
+    graphics.clear();
+    graphics.fillStyle(0xffd166, 1).fillRoundedRect(0, 0, 32, 48, 6);
+    graphics.generateTexture('player', 32, 48);
+    graphics.clear();
+    graphics.fillStyle(0xff6b6b, 1).fillRoundedRect(0, 0, 32, 32, 6);
+    graphics.generateTexture('gremlin', 32, 32);
+    graphics.clear();
+    graphics.fillStyle(0x66ffcc, 1).fillRoundedRect(0, 0, 20, 32, 4);
+    graphics.generateTexture('battery', 20, 32);
     graphics.destroy();
 
     const bg1 = this.add.tileSprite(0, 0, LEVEL_WIDTH, GAME_HEIGHT, 'bg-layer')
@@ -260,9 +285,7 @@ class GameScene extends Phaser.Scene {
     }
 
     // Player setup.
-    this.player = this.physics.add.sprite(100, 320, null);
-    this.player.setDisplaySize(32, 48);
-    this.player.setTint(0xffd166);
+    this.player = this.physics.add.sprite(100, 320, 'player');
     this.player.setCollideWorldBounds(true);
     this.player.body.setSize(24, 46);
 
@@ -275,9 +298,8 @@ class GameScene extends Phaser.Scene {
     for (let i = 0; i < 10; i += 1) {
       const xPos = 200 + i * batterySpacing + Phaser.Math.Between(-30, 30);
       const yPos = Phaser.Math.Between(180, 360);
-      const battery = this.collectibles.create(xPos, yPos, null);
-      battery.setDisplaySize(20, 32);
-      battery.setTint(0x66ffcc);
+      const battery = this.collectibles.create(xPos, yPos, 'battery');
+      battery.refreshBody();
       battery.setData('battery', true);
     }
 
@@ -285,9 +307,7 @@ class GameScene extends Phaser.Scene {
     this.enemies = this.physics.add.group();
     for (let i = 0; i < 3; i += 1) {
       const xPos = 400 + i * 450;
-      const enemy = this.enemies.create(xPos, 320, null);
-      enemy.setDisplaySize(32, 32);
-      enemy.setTint(0xff6b6b);
+      const enemy = this.enemies.create(xPos, 320, 'gremlin');
       enemy.body.setCollideWorldBounds(true);
       enemy.body.setAllowGravity(true);
       enemy.setData('patrol', { min: xPos - 80, max: xPos + 80, speed: 80 });
@@ -541,17 +561,14 @@ class GameScene extends Phaser.Scene {
     for (let i = 0; i < 10; i += 1) {
       const xPos = 200 + i * batterySpacing + Phaser.Math.Between(-30, 30);
       const yPos = Phaser.Math.Between(180, 360);
-      const battery = this.collectibles.create(xPos, yPos, null);
-      battery.setDisplaySize(20, 32);
-      battery.setTint(0x66ffcc);
+      const battery = this.collectibles.create(xPos, yPos, 'battery');
+      battery.refreshBody();
       battery.setData('battery', true);
     }
     this.enemies.clear(true, true);
     for (let i = 0; i < 3; i += 1) {
       const xPos = 400 + i * 450;
-      const enemy = this.enemies.create(xPos, 320, null);
-      enemy.setDisplaySize(32, 32);
-      enemy.setTint(0xff6b6b);
+      const enemy = this.enemies.create(xPos, 320, 'gremlin');
       enemy.body.setCollideWorldBounds(true);
       enemy.setData('patrol', { min: xPos - 80, max: xPos + 80, speed: 80 });
       enemy.setVelocityX(80);
