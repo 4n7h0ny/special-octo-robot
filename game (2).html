@@ -66,6 +66,12 @@ document.addEventListener("keydown", e => {
 });
 document.addEventListener("keyup", e => keys[e.code] = false);
 
+let floatingMessage = { text: "", timer: 0, color: "#fff" };
+
+function showMessage(text, color = "#fff", duration = 120) {
+  floatingMessage = { text, color, timer: duration };
+}
+
 async function resumeAudioContext() {
   if (audioContext.state === "suspended") {
     await audioContext.resume();
@@ -110,8 +116,12 @@ let musicPlaying = false;
 const titleMusic = document.getElementById("titleMusic");
 
 // Load Base64 audio data for title music
-if (typeof BASE64_TITLE_MUSIC_DATA !== 'undefined' && titleMusic) {
-  titleMusic.src = 'data:audio/mpeg;base64,' + BASE64_TITLE_MUSIC_DATA;
+if (titleMusic) {
+  if (typeof BASE64_TITLE_MUSIC_DATA !== 'undefined' && BASE64_TITLE_MUSIC_DATA.length > 0) {
+    titleMusic.src = 'data:audio/mpeg;base64,' + BASE64_TITLE_MUSIC_DATA;
+  } else {
+    titleMusic.src = 'IntroMusic.mp3';
+  }
 }
 
 function playTitleMusic() {
@@ -227,7 +237,13 @@ const player = {
   helperBuff: 0,
   glide: false,
   momentum: 0,
-  jumpHeld: false
+  jumpHeld: false,
+  currentWeapon: "fire",
+  weaponMessageTimer: 0,
+  heroLevel: 1,
+  nextLevelAt: 10,
+  wingsTimer: 0,
+  zone: "surface"
 };
 
 const characterProfiles = {
@@ -344,6 +360,10 @@ const levels = {
       {x: 2080, y: 360, w: 220, h: 30},
       {x: 2380, y: 300, w: 200, h: 30}
     ],
+    boxes: [
+      {x: 780, y: 250, w: 42, h: 42, opened: false, contents: ["ice", "spread", "wings"]},
+      {x: 1680, y: 280, w: 42, h: 42, opened: false, contents: ["spread", "fire"]}
+    ],
     movingPlatforms: [
       {x: 620, y: 320, w: 180, h: 22, path: [{x: 620, y: 320}, {x: 980, y: 260}], speed: 1.2, target: 1},
       {x: 1880, y: 360, w: 140, h: 22, path: [{x: 1880, y: 360}, {x: 1880, y: 250}], speed: 1, target: 1}
@@ -370,7 +390,49 @@ const levels = {
       {x: 1500, y: 300, w: 42, h: 42, dir: -1, min: 1460, max: 1700},
       {x: 2200, y: 330, w: 40, h: 40, dir: 1, min: 2080, max: 2300}
     ],
-    finish: {x: 2550, y: 250, w: 120, h: 22}
+    finish: {x: 2550, y: 250, w: 120, h: 22},
+    pipes: [
+      {x: 420, y: 380, w: 64, h: 50, targetZone: "underground", exit: {x: 120, y: 320}},
+      {x: 2300, y: 380, w: 64, h: 50, targetZone: "underground", exit: {x: 560, y: 320}}
+    ],
+    underground: {
+      width: 1800,
+      theme: "underground",
+      platforms: [
+        {x: 0, y: 440, w: 400, h: 40},
+        {x: 420, y: 360, w: 240, h: 26},
+        {x: 720, y: 300, w: 220, h: 24},
+        {x: 1020, y: 260, w: 200, h: 24},
+        {x: 1260, y: 320, w: 220, h: 26},
+        {x: 1500, y: 380, w: 240, h: 28}
+      ],
+      boxes: [
+        {x: 540, y: 230, w: 42, h: 42, opened: false, contents: ["wings", "ice"]}
+      ],
+      movingPlatforms: [
+        {x: 300, y: 320, w: 120, h: 20, path: [{x: 300, y: 320}, {x: 520, y: 260}], speed: 1.2, target: 1}
+      ],
+      jumpPads: [
+        {x: 1340, y: 336, w: 80, h: 12, power: -18}
+      ],
+      hazards: [
+        {x: 0, y: 480, w: 1800, h: 40, lava: true},
+        {x: 880, y: 340, w: 90, h: 26}
+      ],
+      coins: [
+        {x: 260, y: 300, taken:false},
+        {x: 620, y: 240, taken:false},
+        {x: 1180, y: 230, taken:false},
+        {x: 1580, y: 290, taken:false}
+      ],
+      enemies: [
+        {x: 460, y: 320, w: 38, h: 38, dir: 1, min: 420, max: 660, type: "crawler"},
+        {x: 1100, y: 240, w: 42, h: 42, dir: -1, min: 1020, max: 1260, type: "flier"}
+      ],
+      pipes: [
+        {x: 1700, y: 340, w: 64, h: 80, targetZone: "surface", exit: {x: 2400, y: 320}}
+      ]
+    }
   },
 
   2: {
@@ -524,11 +586,44 @@ const levels = {
   }
 };
 
+function getLevelZone() {
+  const base = levels[currentLevel];
+  if (player.zone === "underground" && base.underground) return base.underground;
+  return base;
+}
+
 /* ======================================================================
    GAME INITIALIZATION AND RESET LOGIC (Refactored)
    ====================================================================== */
 
 // NEW NAME: Resets all game data (player, levels, boss) without setting the screen state
+function resetZoneState(zone) {
+  if (!zone) return;
+  if (zone.coins) {
+    for (let c of zone.coins) c.taken = false;
+  }
+  if (zone.enemies) {
+    for (let e of zone.enemies) {
+      e.dir = 1;
+      e.x = e.min;
+      e.defeated = false;
+      e.slowTimer = 0;
+    }
+  }
+  if (zone.movingPlatforms) {
+    for (let m of zone.movingPlatforms) {
+      m.x = m.path[0].x;
+      m.y = m.path[0].y;
+      m.target = 1;
+      m.vx = 0;
+      m.vy = 0;
+    }
+  }
+  if (zone.boxes) {
+    for (let b of zone.boxes) b.opened = false;
+  }
+}
+
 function initializeGameData() {
   player.x = 50;
   player.y = 350;
@@ -548,6 +643,13 @@ function initializeGameData() {
   player.glide = false;
   player.momentum = 0;
   player.jumpHeld = false;
+  player.currentWeapon = "fire";
+  player.weaponMessageTimer = 0;
+  player.heroLevel = 1;
+  player.nextLevelAt = 10;
+  player.wingsTimer = 0;
+  player.zone = "surface";
+  floatingMessage = { text: "", timer: 0, color: "#fff" };
 
   currentLevel = 1;
   retriesLeft = maxLevelRetries;
@@ -557,22 +659,8 @@ function initializeGameData() {
   for (let lvl of Object.keys(levels)) {
     const numLvl = Number(lvl);
     if (!levels[numLvl]) continue;
-    for (let c of levels[numLvl].coins) c.taken = false;
-    for (let e of levels[numLvl].enemies) {
-      e.dir = 1;
-      e.x = e.min;
-      e.defeated = false;
-      e.slowTimer = 0;
-    }
-    if (levels[numLvl].movingPlatforms) {
-      for (let m of levels[numLvl].movingPlatforms) {
-        m.x = m.path[0].x;
-        m.y = m.path[0].y;
-        m.target = 1;
-        m.vx = 0;
-        m.vy = 0;
-      }
-    }
+    resetZoneState(levels[numLvl]);
+    if (levels[numLvl].underground) resetZoneState(levels[numLvl].underground);
   }
 
   helperChief.active = false;
@@ -609,20 +697,18 @@ function restartLevel() {
   player.glide = false;
   player.momentum = 0;
   player.jumpHeld = false;
+  player.currentWeapon = "fire";
+  player.weaponMessageTimer = 0;
+  player.heroLevel = 1;
+  player.nextLevelAt = 10;
+  player.wingsTimer = 0;
+  player.zone = "surface";
+  floatingMessage = { text: "", timer: 0, color: "#fff" };
 
   // reset collectibles and enemy positions for current level
   const lvl = levels[currentLevel];
-  for (let c of lvl.coins) c.taken = false;
-  for (let e of lvl.enemies) { e.dir = 1; e.x = e.min; e.defeated = false; e.slowTimer = 0; }
-  if (lvl.movingPlatforms) {
-    for (let m of lvl.movingPlatforms) {
-      m.x = m.path[0].x;
-      m.y = m.path[0].y;
-      m.target = 1;
-      m.vx = 0;
-      m.vy = 0;
-    }
-  }
+  resetZoneState(lvl);
+  if (lvl.underground) resetZoneState(lvl.underground);
 
   // reset boss state when retrying boss levels
   if (levels[currentLevel].isBossLevel) {
@@ -640,7 +726,7 @@ function restartLevel() {
    ====================================================================== */
 
 function applyCharacterTraits() {
-  player.maxJumps = characterChoice === "unicorn" ? 2 : 1;
+  player.maxJumps = characterChoice === "unicorn" || player.wingsTimer > 0 ? 2 : 1;
   if (characterChoice === "bart") {
     player.speed = 6 + player.momentum * 0.6;
   } else if (characterChoice === "lisa") {
@@ -651,7 +737,8 @@ function applyCharacterTraits() {
 }
 
 function updateMovingPlatforms() {
-  const moves = levels[currentLevel].movingPlatforms || [];
+  const lvl = getLevelZone();
+  const moves = lvl.movingPlatforms || [];
   for (let m of moves) {
     if (!m.path || m.path.length < 2) continue;
     const target = m.path[m.target];
@@ -672,7 +759,7 @@ function updateMovingPlatforms() {
 }
 
 function handleJumpPads() {
-  const pads = levels[currentLevel].jumpPads || [];
+  const pads = getLevelZone().jumpPads || [];
   for (let pad of pads) {
     const onPad =
       player.x + player.r > pad.x &&
@@ -690,7 +777,7 @@ function handleJumpPads() {
 }
 
 function handleHazards() {
-  const spikes = levels[currentLevel].hazards || [];
+  const spikes = getLevelZone().hazards || [];
   for (let hz of spikes) {
     if (player.invincible > 0 || player.helperBuff > 0) continue;
     const touching =
@@ -701,6 +788,7 @@ function handleHazards() {
       player.health--;
       player.invincible = 60;
       player.vy = -10;
+      if (hz.lava) player.vy = -14;
       playHitSound();
       if (player.health <= 0) {
         gameState = "dead";
@@ -712,6 +800,7 @@ function handleHazards() {
 
 function applyPhysics() {
   applyCharacterTraits();
+  if (floatingMessage.timer > 0) floatingMessage.timer--;
   player.vy += 0.7;
 
   if (keys["ArrowLeft"] || keys["KeyA"]) { player.vx = -player.speed; facingDir = -1; }
@@ -736,11 +825,36 @@ function applyPhysics() {
   if (player.shotCooldown > 0) player.shotCooldown--;
   if (keys["KeyF"] && player.shotCooldown === 0) {
     const baseSpeed = characterChoice === "bart" ? 11 : characterChoice === "lisa" ? 9 : 10;
-    const bullet = { x: player.x, y: player.y - 5, vx: facingDir * baseSpeed, r: 8, ttl: 90 };
-    if (characterChoice === "lisa") bullet.slow = true;
-    if (characterChoice === "bart") bullet.pierce = 1;
-    player.shots.push(bullet);
-    player.shotCooldown = characterChoice === "lisa" ? 14 : 18;
+    const weapon = player.currentWeapon;
+    const mkBullet = (vy = 0) => ({ x: player.x, y: player.y - 5, vx: facingDir * baseSpeed, vy, r: 8, ttl: 90 });
+    if (weapon === "ice") {
+      const bullet = mkBullet();
+      bullet.slow = true;
+      bullet.color = "#60a5fa";
+      player.shots.push(bullet);
+      player.shotCooldown = 16;
+    } else if (weapon === "spread") {
+      const angles = [-0.6, 0, 0.6];
+      for (let a of angles) {
+        const b = mkBullet(a);
+        b.color = "#f97316";
+        player.shots.push(b);
+      }
+      player.shotCooldown = 22;
+    } else if (weapon === "wings") {
+      const feather = mkBullet();
+      feather.r = 10;
+      feather.color = "#fde68a";
+      feather.pierce = 1;
+      player.shots.push(feather);
+      player.shotCooldown = 18;
+    } else {
+      const bullet = mkBullet();
+      if (characterChoice === "lisa") bullet.slow = true;
+      if (characterChoice === "bart") bullet.pierce = 1;
+      player.shots.push(bullet);
+      player.shotCooldown = characterChoice === "lisa" ? 14 : 18;
+    }
     playTone(520, 0.1, 0.09);
   }
 
@@ -769,6 +883,13 @@ function applyPhysics() {
   player.x += player.vx;
   player.y += player.vy;
 
+  if (player.wingsTimer > 0) {
+    player.wingsTimer--;
+    if (keys["Space"] || keys["ArrowUp"]) {
+      player.vy -= 0.35;
+    }
+  }
+
   // Check if player fell off the map
   if (player.y > 600) {
     player.health = 0;
@@ -780,10 +901,13 @@ function applyPhysics() {
   if (player.shieldTimer > 0) player.shieldTimer--;
   if (player.helperBuff > 0) player.helperBuff--;
 
+  handleBoxes();
+
   updateMovingPlatforms();
   handlePlatforms();
   handleJumpPads();
   handleHazards();
+  handlePipes();
   handleCoins();
   handleEnemies();
   handleShots();
@@ -828,7 +952,8 @@ function updateHelper() {
    PLATFORM COLLISIONS
    ====================================================================== */
 function handlePlatforms() {
-  const platList = [...levels[currentLevel].platforms, ...(levels[currentLevel].movingPlatforms || [])];
+  const lvl = getLevelZone();
+  const platList = [...(lvl.platforms || []), ...(lvl.movingPlatforms || []), ...(lvl.pipes || [])];
   player.onGround = false;
 
   for (let p of platList) {
@@ -874,8 +999,9 @@ function handlePlatforms() {
    ====================================================================== */
 
 function handleCoins() {
-  const lvl = levels[currentLevel];
-  for (let c of lvl.coins) {
+  const lvl = getLevelZone();
+  const coins = lvl.coins || [];
+  for (let c of coins) {
     if (c.taken) continue;
     if (Math.hypot(player.x - c.x, player.y - c.y) < 25) {
       c.taken = true;
@@ -883,14 +1009,82 @@ function handleCoins() {
       playCoinSound();
     }
   }
-  
+
   if (player.coins >= player.coinMilestone + 5) {
     player.health = Math.min(player.health + 1, 5); // Max 5 hearts
     player.coinMilestone = player.coins;
   }
+
+  handleLevelUps();
+}
+
+function handleLevelUps() {
+  if (player.coins >= player.nextLevelAt) {
+    player.heroLevel++;
+    player.nextLevelAt += 10;
+    player.speed += 0.3;
+    player.jumpVel -= 0.25;
+    player.health = Math.min(player.health + 1, 5);
+    showMessage(`Level Up! Level ${player.heroLevel}`, "#7cf17c", 140);
+  }
+}
+
+function grantWeapon(kind) {
+  if (kind === "wings") {
+    player.wingsTimer = 600;
+    player.currentWeapon = "wings";
+    showMessage("Winged flight unlocked!", "#7cf17c", 160);
+    return;
+  }
+
+  player.currentWeapon = kind;
+  showMessage(`${kind.toUpperCase()} equipped!`, "#ffd166", 120);
+}
+
+function handleBoxes() {
+  const lvl = getLevelZone();
+  for (let box of (lvl.boxes || [])) {
+    if (box.opened) continue;
+    const headHit =
+      player.vy < 0 &&
+      player.x + player.r > box.x &&
+      player.x - player.r < box.x + box.w &&
+      player.y - player.r < box.y + box.h &&
+      player.y - player.r > box.y + box.h - 12;
+    if (headHit) {
+      box.opened = true;
+      player.vy = 2;
+      const loot = box.contents || ["fire"];
+      const chosen = loot[Math.floor(Math.random() * loot.length)];
+      grantWeapon(chosen);
+    }
+  }
+}
+
+function handlePipes() {
+  const lvl = getLevelZone();
+  const downPressed = keys["ArrowDown"] || keys["KeyS"];
+  for (let pipe of (lvl.pipes || [])) {
+    const onPipe =
+      player.x + player.r > pipe.x &&
+      player.x - player.r < pipe.x + pipe.w &&
+      player.y + player.r >= pipe.y - 4 &&
+      player.y + player.r <= pipe.y + 20;
+    if (onPipe && downPressed) {
+      player.zone = pipe.targetZone === "underground" ? "underground" : "surface";
+      const exit = pipe.exit || { x: player.x, y: player.y };
+      player.x = exit.x;
+      player.y = exit.y;
+      player.vx = 0;
+      player.vy = 0;
+      showMessage(player.zone === "underground" ? "Secret tunnel discovered!" : "Back above ground!", "#7cf17c", 120);
+      return;
+    }
+  }
 }
 
 function handleFinish() {
+  if (player.zone !== "surface") return; // finish flags only exist on surface
   const lvl = levels[currentLevel];
   const finish = lvl.finish;
   if (!finish) return;
@@ -908,22 +1102,28 @@ function handleFinish() {
       if (boss) boss.active = true;
       player.x = 50;
       player.y = 350;
+      player.zone = "surface";
     } else {
       player.x = 50;
       player.y = 350;
+      player.zone = "surface";
     }
   }
 }
 
 function handleEnemies() {
-  const lvl = levels[currentLevel];
-  for (let e of lvl.enemies) {
+  const lvl = getLevelZone();
+  for (let e of (lvl.enemies || [])) {
     if (e.defeated) continue;
-    
+
     const slowFactor = e.slowTimer > 0 ? 0.4 : 1;
     if (e.slowTimer > 0) e.slowTimer--;
 
-    e.x += e.dir * 2 * slowFactor;
+    const baseSpeed = e.type === "flier" ? 2.6 : e.type === "crawler" ? 1.4 : 2;
+    e.x += e.dir * baseSpeed * slowFactor;
+    if (e.type === "flier") {
+      e.y += Math.sin(Date.now() / 300) * 1.5;
+    }
     if (e.x < e.min || e.x > e.max) e.dir *= -1;
 
     if (player.invincible > 0 || player.helperBuff > 0) continue;
@@ -950,18 +1150,21 @@ function handleEnemies() {
    ====================================================================== */
 
 function handleShots() {
+  const lvl = getLevelZone();
   for (let i = player.shots.length - 1; i >= 0; i--) {
     const s = player.shots[i];
     s.x += s.vx;
+    if (s.vy) s.y += s.vy;
     s.ttl--;
 
-    if (s.ttl <= 0 || s.x < -50 || s.x > levels[currentLevel].width + 50) {
+    const levelWidth = lvl.width || levels[currentLevel].width;
+    if (s.ttl <= 0 || s.x < -50 || s.x > levelWidth + 50) {
       player.shots.splice(i, 1);
       continue;
     }
 
     // Hit enemies
-    for (let e of levels[currentLevel].enemies) {
+    for (let e of (lvl.enemies || [])) {
       if (e.defeated) continue;
       
       if (s.x + s.r > e.x && s.x - s.r < e.x + e.w &&
@@ -978,7 +1181,7 @@ function handleShots() {
     }
 
     // Hit boss
-    if (levels[currentLevel].isBossLevel && boss && boss.active) {
+    if (levels[currentLevel].isBossLevel && boss && boss.active && player.zone === "surface") {
       const dx = s.x - boss.x;
       const dy = s.y - boss.y;
       if (Math.abs(dx) < 60 && Math.abs(dy) < 70) {
@@ -1101,7 +1304,7 @@ function drawStartScreen() {
 }
 
 
-function drawCharacterBall(x, y, r, type) {
+function drawCharacterBall(x, y, r, type, facing = 1) {
   const profile = characterProfiles[type] || characterProfiles.bart;
   
   const grad = ctx.createRadialGradient(x - 8, y - 8, r * 0.25, x, y, r);
@@ -1121,10 +1324,11 @@ function drawCharacterBall(x, y, r, type) {
   ctx.arc(x, y - r * 0.4, r * 0.4, 0, Math.PI * 2);
   ctx.fill();
 
+  const eyeShift = facing === -1 ? -3 : 3;
   ctx.fillStyle = "#0b090a";
   ctx.beginPath();
-  ctx.arc(x - 6, y - 2, 3.5, 0, Math.PI * 2);
-  ctx.arc(x + 6, y - 2, 3.5, 0, Math.PI * 2);
+  ctx.arc(x - 6 + eyeShift, y - 2, 3.5, 0, Math.PI * 2);
+  ctx.arc(x + 6 + eyeShift, y - 2, 3.5, 0, Math.PI * 2);
   ctx.fill();
 
   ctx.strokeStyle = profile.detail;
@@ -1132,6 +1336,14 @@ function drawCharacterBall(x, y, r, type) {
   ctx.beginPath();
   ctx.arc(x, y + 6, 8, 0.15 * Math.PI, 0.85 * Math.PI);
   ctx.stroke();
+
+  ctx.fillStyle = profile.detail;
+  ctx.beginPath();
+  ctx.moveTo(x + facing * (r + 6), y);
+  ctx.lineTo(x + facing * (r + 2), y - 6);
+  ctx.lineTo(x + facing * (r + 2), y + 6);
+  ctx.closePath();
+  ctx.fill();
 
   if (type === "bart") {
     ctx.fillStyle = "#2d3436";
@@ -1250,7 +1462,7 @@ function drawBoss(camX) {
 
 function drawHUD() {
   ctx.fillStyle = "rgba(0,0,0,0.5)";
-  ctx.fillRect(10, 10, 250, 50);
+  ctx.fillRect(10, 10, 360, 110);
 
   ctx.fillStyle = "white";
   ctx.font = "18px sans-serif";
@@ -1263,10 +1475,11 @@ function drawHUD() {
   }
   
   // Level indicator
-  ctx.fillText("Level: " + currentLevel, 20, 55);
-  
+  ctx.fillText("Stage: " + currentLevel, 20, 55);
+  ctx.fillText("Hero Lv: " + player.heroLevel, 180, 55);
+
   // Retries
-  ctx.fillText("Retries: " + retriesLeft, 150, 55);
+  ctx.fillText("Retries: " + retriesLeft, 280, 55);
 
   ctx.fillStyle = "#ffd166";
   ctx.fillText("Special (Q): " + characterProfiles[characterChoice].specialName, 20, 75);
@@ -1275,21 +1488,43 @@ function drawHUD() {
   ctx.fillRect(180, 66, Math.max(0, 120 - player.specialCooldown), 6);
   ctx.strokeStyle = "#333";
   ctx.strokeRect(180, 66, 120, 6);
+
+  ctx.fillStyle = "#a5f3fc";
+  ctx.fillText("Weapon: " + player.currentWeapon, 20, 95);
+  ctx.fillStyle = "#cbd5e1";
+  ctx.fillText("Next Lv in: " + Math.max(0, player.nextLevelAt - player.coins) + " coins", 180, 95);
+  if (player.wingsTimer > 0) {
+    ctx.fillStyle = "#fef08a";
+    ctx.fillText("Wings: " + Math.ceil(player.wingsTimer / 60) + "s", 20, 115);
+  }
+
+  if (floatingMessage.timer > 0) {
+    ctx.fillStyle = floatingMessage.color;
+    ctx.font = "20px sans-serif";
+    ctx.fillText(floatingMessage.text, 500, 35);
+  }
 }
 
 function drawBackdrop(camX) {
-  const horizon = 170;
-  
+  const zone = getLevelZone();
+  const underground = zone.theme === "underground";
+  const horizon = underground ? 220 : 170;
+
   // sky gradient
   const sky = ctx.createLinearGradient(0, 0, 0, canvas.height);
-  sky.addColorStop(0, "#7fc8f8");
-  sky.addColorStop(1, "#c7e9fb");
+  if (underground) {
+    sky.addColorStop(0, "#0f172a");
+    sky.addColorStop(1, "#1f2937");
+  } else {
+    sky.addColorStop(0, "#7fc8f8");
+    sky.addColorStop(1, "#c7e9fb");
+  }
   ctx.fillStyle = sky;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
   // distant mountains with subtle parallax
   const mountainOffset = camX * 0.15;
-  ctx.fillStyle = "#7ba2d4";
+  ctx.fillStyle = underground ? "#111827" : "#7ba2d4";
   ctx.beginPath();
   ctx.moveTo(-200 - mountainOffset, horizon + 30);
   ctx.lineTo(150 - mountainOffset, 80);
@@ -1299,7 +1534,7 @@ function drawBackdrop(camX) {
   ctx.lineTo(-200 - mountainOffset, canvas.height);
   ctx.fill();
 
-  ctx.fillStyle = "#5f7bb5";
+  ctx.fillStyle = underground ? "#0b132b" : "#5f7bb5";
   const mountainOffset2 = camX * 0.3;
   ctx.beginPath();
   ctx.moveTo(50 - mountainOffset2, horizon + 60);
@@ -1338,7 +1573,7 @@ function drawBackdrop(camX) {
 }
 
 function drawLevel(camX) {
-  const lvl = levels[currentLevel];
+  const lvl = getLevelZone();
 
   // static platforms (with 3D perspective effect)
   for (let p of lvl.platforms) {
@@ -1412,14 +1647,49 @@ function drawLevel(camX) {
   // hazards
   for (let hz of (lvl.hazards || [])) {
     const hx = hz.x - camX;
-    ctx.fillStyle = "#b23a48";
-    ctx.beginPath();
-    for (let i = 0; i < hz.w / 10; i++) {
-      ctx.moveTo(hx + i * 10, hz.y + hz.h);
-      ctx.lineTo(hx + i * 10 + 5, hz.y + 10);
-      ctx.lineTo(hx + i * 10 + 10, hz.y + hz.h);
+    if (hz.lava) {
+      const lavaGrad = ctx.createLinearGradient(hx, hz.y, hx, hz.y + hz.h);
+      lavaGrad.addColorStop(0, "#ff9f1c");
+      lavaGrad.addColorStop(1, "#b23a48");
+      ctx.fillStyle = lavaGrad;
+      ctx.fillRect(hx, hz.y, hz.w, hz.h);
+      for (let i = 0; i < hz.w / 20; i++) {
+        ctx.fillStyle = "rgba(255,255,255,0.35)";
+        ctx.fillRect(hx + i * 20, hz.y + 4, 6, 10);
+      }
+    } else {
+      ctx.fillStyle = "#b23a48";
+      ctx.beginPath();
+      for (let i = 0; i < hz.w / 10; i++) {
+        ctx.moveTo(hx + i * 10, hz.y + hz.h);
+        ctx.lineTo(hx + i * 10 + 5, hz.y + 10);
+        ctx.lineTo(hx + i * 10 + 10, hz.y + hz.h);
+      }
+      ctx.fill();
     }
-    ctx.fill();
+  }
+
+  // pipes
+  for (let pipe of (lvl.pipes || [])) {
+    const px = pipe.x - camX;
+    ctx.fillStyle = "#2ecc71";
+    ctx.fillRect(px, pipe.y, pipe.w, pipe.h);
+    ctx.fillStyle = "#27ae60";
+    ctx.fillRect(px - 4, pipe.y, pipe.w + 8, 10);
+    ctx.strokeStyle = "rgba(0,0,0,0.3)";
+    ctx.strokeRect(px, pipe.y, pipe.w, pipe.h);
+  }
+
+  // floating boxes
+  for (let box of (lvl.boxes || [])) {
+    const bx = box.x - camX;
+    ctx.fillStyle = box.opened ? "#b5651d" : "#f0c419";
+    ctx.fillRect(bx, box.y, box.w, box.h);
+    ctx.strokeStyle = "#5a3e1b";
+    ctx.strokeRect(bx, box.y, box.w, box.h);
+    ctx.fillStyle = box.opened ? "#8d5524" : "#fef08a";
+    ctx.font = "bold 20px sans-serif";
+    ctx.fillText(box.opened ? "✓" : "?", bx + box.w / 2 - 6, box.y + box.h / 2 + 6);
   }
 
   // finish line
@@ -1434,7 +1704,7 @@ function drawLevel(camX) {
   }
 
   // coins
-  for (let c of lvl.coins) {
+  for (let c of (lvl.coins || [])) {
     if (c.taken) continue;
     ctx.fillStyle = "#ffd166";
     ctx.beginPath();
@@ -1446,12 +1716,12 @@ function drawLevel(camX) {
   }
 
   // enemies
-  for (let e of lvl.enemies) {
+  for (let e of (lvl.enemies || [])) {
     if (e.defeated) continue;
     const ex = e.x - camX;
     const size = e.w;
 
-    ctx.fillStyle = e.slowTimer > 0 ? "#0ea5e9" : "#ff4040";
+    ctx.fillStyle = e.type === "flier" ? "#8a5cf6" : e.slowTimer > 0 ? "#0ea5e9" : "#ff4040";
     ctx.beginPath();
     ctx.arc(ex + size / 2, e.y + size / 2, size / 2, 0, Math.PI * 2);
     ctx.fill();
@@ -1473,10 +1743,11 @@ function drawLevel(camX) {
 
   // player shots
   for (let s of player.shots) {
-    ctx.fillStyle = s.slow ? "#4ea8de" : "#ffd166";
+    ctx.fillStyle = s.color || (s.slow ? "#4ea8de" : "#ffd166");
     ctx.beginPath();
     ctx.arc(s.x - camX, s.y, s.r, 0, Math.PI * 2);
     ctx.fill();
+    ctx.fillRect(s.x - camX - Math.sign(s.vx || facingDir) * 6, s.y - 2, 8, 4);
   }
 
   // boss
@@ -1507,7 +1778,23 @@ function drawPlayer(camX) {
       ctx.restore();
     }
     
-    drawCharacterBall(player.x - camX, player.y, player.r, characterChoice);
+    drawCharacterBall(player.x - camX, player.y, player.r, characterChoice, facingDir);
+    if (player.wingsTimer > 0) {
+      ctx.fillStyle = "rgba(254, 240, 138, 0.8)";
+      ctx.beginPath();
+      ctx.moveTo(player.x - camX - player.r - 4, player.y);
+      ctx.lineTo(player.x - camX - player.r - 12, player.y - 14);
+      ctx.lineTo(player.x - camX - player.r - 6, player.y + 14);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.moveTo(player.x - camX + player.r + 4, player.y);
+      ctx.lineTo(player.x - camX + player.r + 12, player.y - 14);
+      ctx.lineTo(player.x - camX + player.r + 6, player.y + 14);
+      ctx.closePath();
+      ctx.fill();
+    }
   }
 
   if (player.shieldTimer > 0 || player.helperBuff > 0) {
@@ -1688,7 +1975,8 @@ function gameLoop() {
     applyPhysics();
 
     let camX = Math.max(0, player.x - canvas.width / 2);
-    camX = Math.min(camX, levels[currentLevel].width - canvas.width);
+    const zoneWidth = getLevelZone().width || levels[currentLevel].width;
+    camX = Math.min(camX, zoneWidth - canvas.width);
 
     drawBackdrop(camX);
     drawLevel(camX);
